@@ -380,12 +380,9 @@ mod tests {
             ExecuteMsg::Purchase {
                 bev_type: "americano".to_string(),
             },
-        );
+        ).unwrap_err();
 
-        match res {
-            Err(ContractError::BeverageIsOver {}) => {}
-            _ => panic!("Must return BeverageIsOver error"),
-        }
+        assert!(matches!(res, ContractError::BeverageIsOver {}));
 
         // increase the price for americano to 9 coins
         execute(
