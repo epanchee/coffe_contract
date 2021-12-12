@@ -49,10 +49,10 @@ pub fn execute(
 ) -> Result<Response, ContractError> {
     match msg {
         ExecuteMsg::UpdateBeverage { bev_type, price } => {
-            update_beverage(deps, _env, info, &bev_type, price)
+            update_beverage(deps, info, &bev_type, price)
         }
         ExecuteMsg::RefillBeverage { bev_type, amount } => {
-            refill_beverage(deps, _env, info, &bev_type, amount)
+            refill_beverage(deps, info, &bev_type, amount)
         }
         ExecuteMsg::Purchase { bev_type } => purchase(deps, _env, info, &bev_type),
         ExecuteMsg::WithdrawIncome {} => withdraw_income(deps, _env, info),
@@ -61,7 +61,6 @@ pub fn execute(
 
 fn update_beverage(
     deps: DepsMut,
-    _env: Env,
     info: MessageInfo,
     bev_type: &str,
     price: Uint128,
@@ -88,7 +87,6 @@ fn update_beverage(
 
 fn refill_beverage(
     deps: DepsMut,
-    _env: Env,
     info: MessageInfo,
     bev_type: &str,
     amount: u8,
