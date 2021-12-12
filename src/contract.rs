@@ -495,8 +495,6 @@ mod tests {
         )
         .unwrap_err();
 
-        dbg!(&res);
-
         assert!(matches!(
             res,
             ContractError::Std(StdError::NotFound { kind: _ })
