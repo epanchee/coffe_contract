@@ -1,12 +1,13 @@
 #![cfg(test)]
 
 use cosmwasm_std::testing::{mock_env, MockApi, MockStorage};
-use cosmwasm_std::{coins, to_binary, Addr, Empty, StdResult, Uint128};
-use cw20::{Cw20Coin, Cw20Contract, Cw20ExecuteMsg};
-use cw_multi_test::{App, AppResponse, BankKeeper, Contract, ContractWrapper, Executor};
+use cosmwasm_std::{coins, Addr, Empty, StdError, Uint128};
+use cw20::{Cw20Coin, Cw20Contract};
+use cw_multi_test::{App, BankKeeper, Contract, ContractWrapper, Executor};
 
 use crate::contract::{execute, instantiate, query};
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
+use crate::state::BeverageStat;
 use crate::ContractError;
 
 fn mock_app() -> App {
@@ -42,6 +43,18 @@ pub fn purchase_msg(name: &str) -> ExecuteMsg {
     }
 }
 
+pub fn query_bev_stat(router: &mut App, sender: Addr, name: &str) -> BeverageStat {
+    router
+        .wrap()
+        .query_wasm_smart(
+            sender,
+            &QueryMsg::BeverageStat {
+                bev_type: String::from(name),
+            },
+        )
+        .unwrap()
+}
+
 pub fn create_and_refill(
     router: &mut App,
     sender: Addr,
@@ -65,47 +78,53 @@ fn test_vending_machine() {
     let mut router = mock_app();
 
     // set personal balance
-    let owner = Addr::unchecked("admin");
+    let admin = Addr::unchecked("admin");
     let init_funds = coins(100, "COFFEETOKEN");
-    router.init_bank_balance(&owner, init_funds).unwrap();
+    router.init_bank_balance(&admin, init_funds).unwrap();
 
     // set up contract
     let contract_id = router.store_code(contract_coffee());
     let msg = InstantiateMsg {
-        admin: owner.clone(),
         initial_balances: vec![Cw20Coin {
             address: "addr0".to_string(),
             amount: Uint128::from(10_u16),
         }],
     };
     let cash_addr = router
-        .instantiate_contract(contract_id, owner.clone(), &msg, &[], "CASH", None)
+        .instantiate_contract(
+            contract_id,
+            admin.clone(),
+            &msg,
+            &[],
+            "Vending-machine",
+            None,
+        )
         .unwrap();
 
     // set up cw20 helpers
     let cash = Cw20Contract(cash_addr.clone());
 
     // ensure our balance
-    let owner_balance = cash.balance(&router, owner.clone()).unwrap();
+    let owner_balance = cash.balance(&router, admin.clone()).unwrap();
     assert_eq!(owner_balance, Uint128::zero());
 
     create_and_refill(
         &mut router,
-        owner.clone(),
+        admin.clone(),
         cash_addr.clone(),
         "americano",
         2,
-        2,
+        1,
     );
     create_and_refill(
         &mut router,
-        owner.clone(),
+        admin.clone(),
         cash_addr.clone(),
         "cappuccino",
         4,
-        1,
+        49,
     );
-    create_and_refill(&mut router, owner.clone(), cash_addr.clone(), "latte", 5, 2);
+    create_and_refill(&mut router, admin.clone(), cash_addr.clone(), "latte", 5, 2);
 
     let customer = Addr::unchecked("addr0");
 
@@ -125,81 +144,127 @@ fn test_vending_machine() {
             &[],
         )
         .unwrap();
-    let err = router.execute_contract(
-        customer,
-        cash_addr.clone(),
-        &purchase_msg("cappuccino"),
-        &[],
-    ).unwrap_err();
 
-    assert!(matches!(err, ContractError::NotEnoughCoins {}))
+    // check errors
+    let err = router
+        .execute_contract(
+            customer.clone(),
+            cash_addr.clone(),
+            &purchase_msg("americano"),
+            &[],
+        )
+        .unwrap_err();
 
-    // // send some tokens to create an escrow
-    // let arb = Addr::unchecked("arbiter");
-    // let ben = String::from("beneficiary");
-    // let id = "demo".to_string();
-    // let create_msg = ReceiveMsg::Create(CreateMsg {
-    //     id: id.clone(),
-    //     arbiter: arb.to_string(),
-    //     recipient: ben.clone(),
-    //     end_height: None,
-    //     end_time: None,
-    //     cw20_whitelist: None,
-    // });
-    // let send_msg = Cw20ExecuteMsg::Send {
-    //     contract: escrow_addr.to_string(),
-    //     amount: Uint128::new(1200),
-    //     msg: to_binary(&create_msg).unwrap(),
-    // };
-    // let res = router
-    //     .execute_contract(owner.clone(), cash_addr.clone(), &send_msg, &[])
-    //     .unwrap();
-    // assert_eq!(4, res.events.len());
-    // println!("{:?}", res.events);
+    assert!(matches!(
+        err.downcast_ref().unwrap(),
+        ContractError::BeverageIsOver {}
+    ));
 
-    // assert_eq!(res.events[0].ty.as_str(), "execute");
-    // let cw20_attr = res.custom_attrs(1);
-    // println!("{:?}", cw20_attr);
-    // assert_eq!(4, cw20_attr.len());
+    let err = router
+        .execute_contract(
+            customer.clone(),
+            cash_addr.clone(),
+            &purchase_msg("cappuccino"),
+            &[],
+        )
+        .unwrap_err();
 
-    // assert_eq!(res.events[2].ty.as_str(), "execute");
-    // let escrow_attr = res.custom_attrs(3);
-    // println!("{:?}", escrow_attr);
-    // assert_eq!(2, escrow_attr.len());
+    assert!(matches!(
+        err.downcast_ref().unwrap(),
+        ContractError::NotEnoughCoins {}
+    ));
 
-    // // ensure balances updated
-    // let owner_balance = cash.balance(&router, owner.clone()).unwrap();
-    // assert_eq!(owner_balance, Uint128::new(3800));
-    // let escrow_balance = cash.balance(&router, escrow_addr.clone()).unwrap();
-    // assert_eq!(escrow_balance, Uint128::new(1200));
+    // triggering overflow (above 50) since 49 items are there
+    let refill_msg = refill_beverage_msg("cappuccino", 2);
+    let err = router
+        .execute_contract(admin.clone(), cash_addr.clone(), &refill_msg, &[])
+        .unwrap_err();
+    assert!(matches!(
+        err.downcast_ref().unwrap(),
+        ContractError::BeverageNumberExceed {}
+    ));
 
-    // // ensure escrow properly created
-    // let details: DetailsResponse = router
-    //     .wrap()
-    //     .query_wasm_smart(&escrow_addr, &QueryMsg::Details { id: id.clone() })
-    //     .unwrap();
-    // assert_eq!(id, details.id);
-    // assert_eq!(arb, details.arbiter);
-    // assert_eq!(ben, details.recipient);
-    // assert_eq!(
-    //     vec![Cw20Coin {
-    //         address: cash_addr.to_string(),
-    //         amount: Uint128::new(1200)
-    //     }],
-    //     details.cw20_balance
-    // );
+    // trying to refill item which does not exist
+    let err = router
+        .execute_contract(
+            customer.clone(),
+            cash_addr.clone(),
+            &purchase_msg("water"),
+            &[],
+        )
+        .unwrap_err();
 
-    // // release escrow
-    // let approve_msg = ExecuteMsg::Approve { id };
-    // let _ = router
-    //     .execute_contract(arb, escrow_addr.clone(), &approve_msg, &[])
-    //     .unwrap();
+    assert!(matches!(
+        err.downcast_ref().unwrap(),
+        ContractError::Std(StdError::NotFound { kind: _ })
+    ));
 
-    // // ensure balances updated - release to ben
-    // let owner_balance = cash.balance(&router, owner).unwrap();
-    // assert_eq!(owner_balance, Uint128::new(3800));
-    // let escrow_balance = cash.balance(&router, escrow_addr).unwrap();
-    // assert_eq!(escrow_balance, Uint128::zero());
-    // let ben_balance = cash.balance(&router, ben).unwrap();
-    // assert_eq!(ben_balance, Uint128::new(1200));
+    // check protected endpoints
+    let err = router
+        .execute_contract(customer.clone(), cash_addr.clone(), &refill_msg, &[])
+        .unwrap_err();
+    assert!(matches!(
+        err.downcast_ref().unwrap(),
+        ContractError::Unauthorized {}
+    ));
+
+    let beer_msg = new_item_msg("beer", 100);
+    let err = router
+        .execute_contract(customer.clone(), cash_addr.clone(), &beer_msg, &[])
+        .unwrap_err();
+    assert!(matches!(
+        err.downcast_ref().unwrap(),
+        ContractError::Unauthorized {}
+    ));
+
+    let err = router
+        .execute_contract(
+            customer.clone(),
+            cash_addr.clone(),
+            &ExecuteMsg::WithdrawIncome {},
+            &[],
+        )
+        .unwrap_err();
+    assert!(matches!(
+        err.downcast_ref().unwrap(),
+        ContractError::Unauthorized {}
+    ));
+
+    // ensure balances
+    let admin_balance = cash.balance(&router, admin.clone()).unwrap();
+    assert_eq!(admin_balance, Uint128::zero());
+    let customer_balance = cash.balance(&router, customer.clone()).unwrap();
+    assert_eq!(customer_balance, Uint128::from(3_u16));
+    let contract_balance = cash.balance(&router, cash_addr.clone()).unwrap();
+    assert_eq!(contract_balance, Uint128::from(7_u16));
+
+    // ensure beverages stats
+    let americano = query_bev_stat(&mut router, cash_addr.clone(), "americano");
+    assert_eq!(Uint128::from(2_u16), americano.price);
+    assert_eq!(0, americano.amount);
+
+    let latte = query_bev_stat(&mut router, cash_addr.clone(), "latte");
+    assert_eq!(Uint128::from(5_u16), latte.price);
+    assert_eq!(1, latte.amount);
+
+    let latte = query_bev_stat(&mut router, cash_addr.clone(), "cappuccino");
+    assert_eq!(Uint128::from(4_u16), latte.price);
+    assert_eq!(49, latte.amount);
+
+    // withdraw income and ensure balances again
+    router
+        .execute_contract(
+            admin.clone(),
+            cash_addr.clone(),
+            &ExecuteMsg::WithdrawIncome {},
+            &[],
+        )
+        .unwrap();
+
+    let admin_balance = cash.balance(&router, admin.clone()).unwrap();
+    assert_eq!(admin_balance, Uint128::from(7_u16));
+    let customer_balance = cash.balance(&router, customer).unwrap();
+    assert_eq!(customer_balance, Uint128::from(3_u16));
+    let contract_balance = cash.balance(&router, cash_addr).unwrap();
+    assert_eq!(contract_balance, Uint128::from(0_u16));
 }

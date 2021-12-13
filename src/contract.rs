@@ -25,7 +25,7 @@ pub fn instantiate(
 
     create_accounts(&mut deps, &msg.initial_balances)?;
     BALANCES.save(deps.storage, &_env.contract.address, &Uint128::zero())?;
-    ADMIN.save(deps.storage, &msg.admin)?;
+    ADMIN.save(deps.storage, &info.sender)?;
 
     Ok(Response::new()
         .add_attribute("method", "instantiate")
@@ -195,7 +195,7 @@ mod tests {
 
     use super::*;
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
-    use cosmwasm_std::{from_binary, Addr, StdError};
+    use cosmwasm_std::{from_binary, StdError};
 
     fn do_intantiate(deps: DepsMut, info: MessageInfo) -> Response {
         let initial_balances = vec![Cw20Coin {
@@ -204,7 +204,6 @@ mod tests {
         }];
 
         let msg = InstantiateMsg {
-            admin: Addr::unchecked("admin".to_string()),
             initial_balances,
         };
 
@@ -380,7 +379,8 @@ mod tests {
             ExecuteMsg::Purchase {
                 bev_type: "americano".to_string(),
             },
-        ).unwrap_err();
+        )
+        .unwrap_err();
 
         assert!(matches!(res, ContractError::BeverageIsOver {}));
 
